@@ -1,0 +1,30 @@
+# Content extraction rules
+extraction:
+  web:
+    timeout: 30
+    max_content_length: 100000
+    allowed_content_types:
+      - text/html
+      - application/pdf
+      - application/msword
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+  
+  pdf:
+    max_pages: 100
+    extract_images: false
+    extract_tables: true
+  
+  document:
+    max_size_mb: 10
+    supported_formats:
+      - doc
+      - docx
+      - pdf
+      - txt
+  
+  cleaning:
+    remove_ads: true
+    remove_navigation: true
+    remove_footers: true
+    remove_headers: true
+    min_content_length: 100 

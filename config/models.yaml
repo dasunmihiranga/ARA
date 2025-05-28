@@ -1,0 +1,16 @@
+# Ollama model configurations
+models:
+  default: llama2
+  available:
+    - name: llama2
+      description: "Meta's Llama 2 model"
+      context_window: 4096
+      temperature: 0.7
+    - name: mistral
+      description: "Mistral AI's model"
+      context_window: 8192
+      temperature: 0.7
+    - name: codellama
+      description: "Code-specific Llama model"
+      context_window: 4096
+      temperature: 0.2 
