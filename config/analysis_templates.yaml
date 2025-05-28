@@ -1,0 +1,203 @@
+# Analysis prompt templates configuration
+
+# Summarization templates
+summarization:
+  basic:
+    template: |
+      Please provide a concise summary of the following text, focusing on the main points and key findings:
+      
+      {text}
+      
+      Requirements:
+      - Length: {length} words
+      - Include key facts and figures
+      - Maintain objectivity
+      - Use clear, professional language
+
+  academic:
+    template: |
+      Please analyze and summarize this academic text, highlighting the research methodology, findings, and implications:
+      
+      {text}
+      
+      Requirements:
+      - Length: {length} words
+      - Include research objectives
+      - Highlight methodology
+      - Summarize key findings
+      - Discuss implications
+      - Note limitations
+
+  technical:
+    template: |
+      Please provide a technical summary of the following content, focusing on specifications, processes, and technical details:
+      
+      {text}
+      
+      Requirements:
+      - Length: {length} words
+      - Include technical specifications
+      - Explain processes
+      - Highlight innovations
+      - Note technical limitations
+
+# Insight extraction templates
+insights:
+  general:
+    template: |
+      Analyze the following text and extract key insights, patterns, and implications:
+      
+      {text}
+      
+      Requirements:
+      - Identify main themes
+      - Extract key insights
+      - Note patterns and trends
+      - Highlight implications
+      - Suggest areas for further research
+
+  business:
+    template: |
+      Analyze this business-related content and extract actionable insights:
+      
+      {text}
+      
+      Requirements:
+      - Identify market trends
+      - Extract competitive insights
+      - Note business opportunities
+      - Highlight risks and challenges
+      - Suggest strategic implications
+
+  scientific:
+    template: |
+      Analyze this scientific content and extract key research insights:
+      
+      {text}
+      
+      Requirements:
+      - Identify research gaps
+      - Extract methodological insights
+      - Note theoretical implications
+      - Highlight practical applications
+      - Suggest future research directions
+
+# Fact-checking templates
+fact_checking:
+  general:
+    template: |
+      Verify the following claims against the provided sources:
+      
+      Claims:
+      {claims}
+      
+      Sources:
+      {sources}
+      
+      Requirements:
+      - Verify each claim
+      - Provide supporting evidence
+      - Note confidence level
+      - Identify contradictions
+      - Suggest additional verification
+
+  academic:
+    template: |
+      Verify these academic claims against the provided research sources:
+      
+      Claims:
+      {claims}
+      
+      Sources:
+      {sources}
+      
+      Requirements:
+      - Verify methodology
+      - Check statistical validity
+      - Compare with existing research
+      - Note confidence level
+      - Identify research gaps
+
+# Sentiment analysis templates
+sentiment:
+  general:
+    template: |
+      Analyze the sentiment and emotional tone of the following text:
+      
+      {text}
+      
+      Requirements:
+      - Overall sentiment
+      - Emotional categories
+      - Intensity levels
+      - Key phrases
+      - Contextual factors
+
+  product:
+    template: |
+      Analyze the sentiment in this product-related content:
+      
+      {text}
+      
+      Requirements:
+      - Product sentiment
+      - Feature-specific sentiment
+      - User experience sentiment
+      - Comparison sentiment
+      - Improvement suggestions
+
+# Topic modeling templates
+topic_modeling:
+  general:
+    template: |
+      Identify and analyze the main topics in the following text:
+      
+      {text}
+      
+      Requirements:
+      - Main topics
+      - Topic distribution
+      - Key terms
+      - Topic relationships
+      - Emerging themes
+
+  academic:
+    template: |
+      Analyze the research topics and themes in this academic content:
+      
+      {text}
+      
+      Requirements:
+      - Research domains
+      - Methodological topics
+      - Theoretical frameworks
+      - Application areas
+      - Future directions
+
+# Common template settings
+common:
+  # Language settings
+  language:
+    default: en
+    supported:
+      - en
+      - es
+      - fr
+      - de
+      - zh
+      - ja
+
+  # Output format
+  output:
+    format: markdown
+    include_metadata: true
+    include_confidence: true
+    include_sources: true
+
+  # Processing settings
+  processing:
+    max_tokens: 2000
+    temperature: 0.7
+    top_p: 0.9
+    frequency_penalty: 0.0
+    presence_penalty: 0.0 
