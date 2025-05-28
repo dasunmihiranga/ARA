@@ -1,0 +1,84 @@
+technical_report:
+  description: "Technical report template for code and system analysis"
+  format: "markdown"
+  template: |
+    # {{ title }}
+
+    ## Overview
+    {{ summary }}
+
+    ## Technical Analysis
+    {% for analysis in technical_analysis %}
+    ### {{ analysis.component }}
+    {{ analysis.description }}
+
+    {% if analysis.code_samples %}
+    **Code Samples:**
+    ```{{ analysis.language }}
+    {{ analysis.code_samples }}
+    ```
+    {% endif %}
+
+    {% if analysis.performance_metrics %}
+    **Performance Metrics:**
+    {% for metric in analysis.performance_metrics %}
+    - {{ metric.name }}: {{ metric.value }}
+    {% endfor %}
+    {% endif %}
+
+    {% if analysis.recommendations %}
+    **Recommendations:**
+    {% for recommendation in analysis.recommendations %}
+    - {{ recommendation }}
+    {% endfor %}
+    {% endif %}
+    {% endfor %}
+
+    ## System Architecture
+    {{ architecture }}
+
+    {% if diagrams %}
+    ## Diagrams
+    {% for diagram in diagrams %}
+    ### {{ diagram.title }}
+    {{ diagram.description }}
+    {{ diagram.content }}
+    {% endfor %}
+    {% endif %}
+
+    ## Implementation Details
+    {% for detail in implementation_details %}
+    ### {{ detail.title }}
+    {{ detail.description }}
+
+    {% if detail.code %}
+    ```{{ detail.language }}
+    {{ detail.code }}
+    ```
+    {% endif %}
+    {% endfor %}
+
+    ## Testing Results
+    {% for test in test_results %}
+    ### {{ test.name }}
+    - Status: {{ test.status }}
+    - Coverage: {{ test.coverage }}
+    - Duration: {{ test.duration }}
+    {% endfor %}
+
+    ## Dependencies
+    {% for dependency in dependencies %}
+    - {{ dependency.name }} ({{ dependency.version }})
+      - Purpose: {{ dependency.purpose }}
+      - License: {{ dependency.license }}
+    {% endfor %}
+
+    ## Metadata
+    - Generated: {{ generated_at }}
+    - Model: {{ model }}
+    - Version: {{ version }}
+
+    {% if options.include_appendix %}
+    ## Appendix
+    {{ appendix }}
+    {% endif %} 

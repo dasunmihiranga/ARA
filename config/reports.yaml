@@ -1,0 +1,99 @@
+# Report generation configurations
+
+# Default report settings
+default:
+  model_name: "mistral"
+  format: "markdown"
+  templates_dir: "src/research_assistant/reports/templates"
+  output_dir: "reports"
+
+# Report types
+report_types:
+  research:
+    description: "Standard research report"
+    template: "research_report"
+    model: "mistral"
+    temperature: 0.7
+    max_tokens: 2000
+    format: "markdown"
+
+  technical:
+    description: "Technical analysis report"
+    template: "technical_report"
+    model: "codellama"
+    temperature: 0.3
+    max_tokens: 3000
+    format: "markdown"
+
+  summary:
+    description: "Brief research summary"
+    template: "summary_report"
+    model: "mistral"
+    temperature: 0.5
+    max_tokens: 1000
+    format: "markdown"
+
+# Report formatting options
+formatting:
+  markdown:
+    extensions:
+      - "tables"
+      - "fenced_code"
+      - "codehilite"
+    options:
+      break_on_newlines: true
+      break_on_headers: true
+
+  html:
+    template: "default.html"
+    css_file: "styles.css"
+    options:
+      pretty_print: true
+      include_metadata: true
+
+  pdf:
+    template: "default.tex"
+    options:
+      page_size: "a4"
+      margin: "1in"
+      font_size: "11pt"
+
+# Report validation rules
+validation:
+  min_sections: 3
+  required_sections:
+    - "title"
+    - "summary"
+    - "findings"
+  max_length: 10000
+  allowed_formats:
+    - "markdown"
+    - "html"
+    - "pdf"
+
+# Report metadata
+metadata:
+  required_fields:
+    - "title"
+    - "generated_at"
+    - "model"
+    - "version"
+  optional_fields:
+    - "author"
+    - "organization"
+    - "project"
+    - "tags"
+
+# Report storage
+storage:
+  local:
+    enabled: true
+    base_dir: "reports"
+    organize_by:
+      - "date"
+      - "type"
+  remote:
+    enabled: false
+    type: "s3"
+    bucket: "research-reports"
+    region: "us-east-1" 

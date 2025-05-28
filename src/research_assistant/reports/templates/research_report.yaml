@@ -1,0 +1,49 @@
+research_report:
+  description: "Standard research report template"
+  format: "markdown"
+  template: |
+    # {{ title }}
+
+    ## Executive Summary
+    {{ summary }}
+
+    ## Key Findings
+    {% for finding in findings %}
+    ### {{ finding.title }}
+    {{ finding.description }}
+
+    {% if finding.evidence %}
+    **Evidence:**
+    {% for evidence in finding.evidence %}
+    - {{ evidence }}
+    {% endfor %}
+    {% endif %}
+
+    {% if finding.implications %}
+    **Implications:**
+    {% for implication in finding.implications %}
+    - {{ implication }}
+    {% endfor %}
+    {% endif %}
+    {% endfor %}
+
+    ## Methodology
+    {{ methodology }}
+
+    ## Sources
+    {% for source in sources %}
+    {{ loop.index }}. {{ source.title }}
+       - URL: {{ source.url }}
+       - Accessed: {{ source.accessed_at }}
+       - Reliability: {{ source.reliability }}
+    {% endfor %}
+
+    ## Metadata
+    - Generated: {{ generated_at }}
+    - Model: {{ model }}
+    - Version: {{ version }}
+
+    {% if options.include_appendix %}
+    ## Appendix
+    {{ appendix }}
+    {% endif %} 
