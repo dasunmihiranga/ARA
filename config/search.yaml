@@ -1,0 +1,80 @@
+# Search engine configurations
+
+# DuckDuckGo configuration
+duckduckgo:
+  api_key: ""  # Optional API key
+  timeout: 30
+  max_results: 10
+  filters:
+    region: "wt-wt"  # Worldwide
+    safesearch: "moderate"
+
+# SearX configuration
+searx:
+  instance_url: "http://localhost:8080"  # Change to your SearX instance
+  api_key: ""  # Optional API key
+  timeout: 30
+  max_results: 10
+  filters:
+    engines: "google,bing,duckduckgo"
+    language: "en"
+    time_range: null
+    category: "general"
+
+# Google Scholar configuration
+scholar:
+  base_url: "https://scholar.google.com"
+  timeout: 30
+  max_results: 10
+  filters:
+    sort_by: "relevance"  # Options: relevance, date
+    year: null  # Filter by year
+
+# arXiv configuration
+arxiv:
+  base_url: "http://export.arxiv.org/api"
+  timeout: 30
+  max_results: 10
+  filters:
+    category: null  # Filter by arXiv category
+    date_range: null  # Format: YYYYMMDDTOYYYYMMDD
+
+# Search manager settings
+manager:
+  max_workers: 4
+  default_timeout: 30
+  default_max_results: 10
+  result_merging:
+    strategy: "weighted"  # Options: weighted, simple
+    weights:
+      duckduckgo: 1.0
+      searx: 1.2
+      scholar: 1.5
+      arxiv: 1.3
+
+# Search validation rules
+validation:
+  min_query_length: 3
+  max_query_length: 500
+  allowed_characters: "a-zA-Z0-9\\s\\-\\.,;:!?()[]{}'\"@#$%^&*+=<>/\\|~`"
+  required_fields:
+    - title
+    - url
+    - snippet
+
+# Error handling
+error_handling:
+  max_retries: 3
+  retry_delay: 1
+  timeout_multiplier: 1.5
+  fallback_engines:
+    - duckduckgo
+    - searx
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/search.log"
+  max_size: 10485760  # 10MB
+  backup_count: 5 
