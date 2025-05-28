@@ -1,22 +1,28 @@
 import aiohttp
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote_plus
+from urllib.parse import urljoin
 
 from research_assistant.search.base_searcher import BaseSearcher, SearchResult
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class DuckDuckGoSearcher(BaseSearcher):
-    """DuckDuckGo search implementation."""
+class SearXSearcher(BaseSearcher):
+    """SearX search implementation."""
 
-    def __init__(self):
-        """Initialize the DuckDuckGo searcher."""
+    def __init__(self, instance_url: str):
+        """
+        Initialize the SearX searcher.
+
+        Args:
+            instance_url: URL of the SearX instance
+        """
         super().__init__(
-            name="duckduckgo",
-            description="Search using DuckDuckGo's API"
+            name="searx",
+            description="Search using SearX metasearch engine"
         )
-        self.base_url = "https://api.duckduckgo.com/"
+        self.instance_url = instance_url.rstrip('/')
+        self.search_url = urljoin(self.instance_url, "/search")
         self.session = None
 
     async def _ensure_session(self):
@@ -31,7 +37,7 @@ class DuckDuckGoSearcher(BaseSearcher):
         filters: Optional[Dict[str, Any]] = None
     ) -> List[SearchResult]:
         """
-        Perform a DuckDuckGo search.
+        Perform a SearX search.
 
         Args:
             query: Search query string
@@ -47,50 +53,48 @@ class DuckDuckGoSearcher(BaseSearcher):
         params = {
             "q": query,
             "format": "json",
-            "no_html": 1,
-            "no_redirect": 1,
-            "skip_disambig": 1
+            "pageno": 1,
+            "engines": "google,bing,duckduckgo",
+            "language": "en",
+            "results_on_page": max_results
         }
 
+        # Add filters if provided
+        if filters:
+            if "engines" in filters:
+                params["engines"] = filters["engines"]
+            if "language" in filters:
+                params["language"] = filters["language"]
+            if "time_range" in filters:
+                params["time_range"] = filters["time_range"]
+
         try:
-            async with self.session.get(self.base_url, params=params) as response:
+            async with self.session.get(self.search_url, params=params) as response:
                 if response.status != 200:
-                    raise Exception(f"DuckDuckGo API error: {response.status}")
+                    raise Exception(f"SearX API error: {response.status}")
 
                 data = await response.json()
                 results = []
 
-                # Process related topics
-                for topic in data.get("RelatedTopics", [])[:max_results]:
-                    if "Text" in topic and "FirstURL" in topic:
-                        results.append(SearchResult(
-                            title=topic["Text"],
-                            url=topic["FirstURL"],
-                            snippet=topic.get("Text", ""),
-                            source="duckduckgo",
-                            metadata={
-                                "type": "related_topic",
-                                "icon": topic.get("Icon", {}).get("URL", "")
-                            }
-                        ))
-
-                # Process abstract results
-                if data.get("Abstract"):
+                # Process search results
+                for result in data.get("results", [])[:max_results]:
                     results.append(SearchResult(
-                        title=data["Heading"],
-                        url=data["AbstractURL"],
-                        snippet=data["Abstract"],
-                        source="duckduckgo",
+                        title=result.get("title", ""),
+                        url=result.get("url", ""),
+                        snippet=result.get("content", ""),
+                        source="searx",
                         metadata={
-                            "type": "abstract",
-                            "image": data.get("Image", "")
+                            "engine": result.get("engine", ""),
+                            "score": result.get("score", 0),
+                            "category": result.get("category", ""),
+                            "img_src": result.get("img_src", "")
                         }
                     ))
 
                 return results
 
         except Exception as e:
-            logger.error(f"DuckDuckGo search error: {str(e)}")
+            logger.error(f"SearX search error: {str(e)}")
             raise
 
     async def validate_query(self, query: str) -> bool:

@@ -43,3 +43,30 @@ python-dotenv==1.0.0
 pydantic==2.5.2
 click==8.1.7
 rich==13.7.0
+
+# Core dependencies
+fastapi>=0.68.0
+uvicorn>=0.15.0
+pydantic>=1.8.0
+python-dotenv>=0.19.0
+PyYAML>=5.4.1
+
+# Search dependencies
+aiohttp>=3.8.0
+arxiv>=1.4.8
+scholarly>=1.7.11
+
+# Logging and monitoring
+structlog>=21.1.0
+python-json-logger>=2.0.2
+
+# Testing
+pytest>=6.2.5
+pytest-asyncio>=0.16.0
+pytest-cov>=2.12.1
+
+# Development
+black>=21.7b0
+isort>=5.9.3
+flake8>=3.9.2
+mypy>=0.910

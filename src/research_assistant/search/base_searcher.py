@@ -1,36 +1,39 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel
+from research_assistant.utils.logging import get_logger
 
-class SearchResult(BaseModel):
-    """Model for search results."""
+logger = get_logger(__name__)
+
+@dataclass
+class SearchResult:
+    """Class representing a search result."""
     title: str
     url: str
     snippet: str
     source: str
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any]
 
 class BaseSearcher(ABC):
-    """Abstract base class for search implementations."""
+    """Base class for search implementations."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, name: str, description: str):
         """
-        Initialize the searcher.
+        Initialize the base searcher.
 
         Args:
-            config: Configuration dictionary for the searcher
+            name: Name of the searcher
+            description: Description of the searcher
         """
-        self.config = config
-        self.name = self.__class__.__name__
-        self.enabled = config.get("enabled", True)
-        self.max_results = config.get("max_results", 10)
-        self.timeout = config.get("timeout", 30)
+        self.name = name
+        self.description = description
+        self.logger = get_logger(f"search.{name}")
 
     @abstractmethod
     async def search(
         self,
         query: str,
-        max_results: Optional[int] = None,
+        max_results: int = 10,
         filters: Optional[Dict[str, Any]] = None
     ) -> List[SearchResult]:
         """
@@ -39,52 +42,83 @@ class BaseSearcher(ABC):
         Args:
             query: Search query string
             max_results: Maximum number of results to return
-            filters: Additional search filters
+            filters: Optional search filters
 
         Returns:
             List of search results
-
-        Raises:
-            NotImplementedError: If the search method is not implemented
         """
-        raise NotImplementedError("Search method must be implemented")
+        pass
 
     @abstractmethod
-    async def validate_connection(self) -> bool:
+    async def validate_query(self, query: str) -> bool:
         """
-        Validate the connection to the search service.
+        Validate a search query.
+
+        Args:
+            query: Query to validate
 
         Returns:
-            True if connection is valid, False otherwise
-
-        Raises:
-            NotImplementedError: If the validation method is not implemented
+            True if query is valid, False otherwise
         """
-        raise NotImplementedError("Connection validation must be implemented")
+        pass
 
-    def get_config(self) -> Dict[str, Any]:
-        """
-        Get the searcher configuration.
+    @abstractmethod
+    async def close(self):
+        """Close any resources used by the searcher."""
+        pass
 
-        Returns:
-            Configuration dictionary
+    def format_result(self, result: SearchResult) -> Dict[str, Any]:
         """
-        return self.config
+        Format a search result for API response.
 
-    def is_enabled(self) -> bool:
-        """
-        Check if the searcher is enabled.
+        Args:
+            result: Search result to format
 
         Returns:
-            True if enabled, False otherwise
+            Formatted result dictionary
         """
-        return self.enabled
+        return {
+            "title": result.title,
+            "url": result.url,
+            "snippet": result.snippet,
+            "source": result.source,
+            "metadata": result.metadata
+        }
 
-    def get_name(self) -> str:
+    async def execute(
+        self,
+        parameters: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        Get the searcher name.
+        Execute the search tool.
+
+        Args:
+            parameters: Search parameters
+            context: Optional execution context
 
         Returns:
-            Searcher name
+            Search results and metadata
         """
-        return self.name 
+        query = parameters.get("query")
+        if not query:
+            raise ValueError("Search query is required")
+
+        max_results = parameters.get("max_results", 10)
+        filters = parameters.get("filters")
+
+        # Validate query
+        if not await self.validate_query(query):
+            raise ValueError(f"Invalid search query: {query}")
+
+        # Perform search
+        results = await self.search(query, max_results, filters)
+
+        # Format results
+        formatted_results = [self.format_result(r) for r in results]
+
+        return {
+            "results": formatted_results,
+            "total": len(results),
+            "source": self.name
+        } 
