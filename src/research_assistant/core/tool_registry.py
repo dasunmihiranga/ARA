@@ -1,4 +1,7 @@
 from typing import Dict, Any, List, Optional, Protocol
+from pydantic import BaseModel
+
+from research_assistant.tools.base_tool import MCPTool
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -20,72 +23,129 @@ class ToolRegistry:
     def __init__(self):
         """Initialize the tool registry."""
         self._tools: Dict[str, MCPTool] = {}
+        self.logger = get_logger("tool_registry")
 
     def register_tool(self, tool: MCPTool) -> None:
         """
-        Register a new MCP tool.
+        Register a new tool.
 
         Args:
-            tool: The tool to register
-
-        Raises:
-            ValueError: If tool with same name is already registered
+            tool: Tool instance to register
         """
-        if tool.name in self._tools:
-            raise ValueError(f"Tool already registered: {tool.name}")
-        
-        logger.info(f"Registering tool: {tool.name}")
-        self._tools[tool.name] = tool
+        if not isinstance(tool, MCPTool):
+            raise ValueError("Tool must be an instance of MCPTool")
 
-    def unregister_tool(self, tool_name: str) -> bool:
+        tool_name = tool.name
+        if tool_name in self._tools:
+            self.logger.warning(f"Tool {tool_name} already registered. Overwriting.")
+
+        self._tools[tool_name] = tool
+        self.logger.info(f"Registered tool: {tool_name}")
+
+    def register_tools(self, tools: list[MCPTool]) -> None:
         """
-        Unregister an MCP tool.
+        Register multiple tools.
 
         Args:
-            tool_name: Name of the tool to unregister
+            tools: List of tool instances to register
+        """
+        for tool in tools:
+            self.register_tool(tool)
+
+    def get_tool(self, name: str) -> Optional[MCPTool]:
+        """
+        Get a tool by name.
+
+        Args:
+            name: Name of the tool
+
+        Returns:
+            Tool instance or None if not found
+        """
+        tool = self._tools.get(name)
+        if not tool:
+            self.logger.warning(f"Tool not found: {name}")
+        return tool
+
+    def list_tools(self) -> Dict[str, Dict[str, Any]]:
+        """
+        List all registered tools.
+
+        Returns:
+            Dictionary of tool information
+        """
+        return {
+            name: {
+                "description": tool.description,
+                "input_model": tool.input_model.__name__ if tool.input_model else None
+            }
+            for name, tool in self._tools.items()
+        }
+
+    def unregister_tool(self, name: str) -> bool:
+        """
+        Unregister a tool.
+
+        Args:
+            name: Name of the tool to unregister
 
         Returns:
             True if tool was unregistered, False if not found
         """
-        if tool_name in self._tools:
-            logger.info(f"Unregistering tool: {tool_name}")
-            del self._tools[tool_name]
+        if name in self._tools:
+            del self._tools[name]
+            self.logger.info(f"Unregistered tool: {name}")
             return True
         return False
 
-    def get_tool(self, tool_name: str) -> Optional[MCPTool]:
+    def clear_tools(self) -> None:
+        """Clear all registered tools."""
+        self._tools.clear()
+        self.logger.info("Cleared all tools")
+
+    async def close(self) -> None:
+        """Close all registered tools."""
+        for name, tool in self._tools.items():
+            try:
+                await tool.close()
+                self.logger.info(f"Closed tool: {name}")
+            except Exception as e:
+                self.logger.error(f"Error closing tool {name}: {str(e)}")
+
+    def validate_tool_input(self, name: str, input_data: Dict[str, Any]) -> bool:
         """
-        Get a registered tool by name.
+        Validate tool input data.
 
         Args:
-            tool_name: Name of the tool to get
+            name: Name of the tool
+            input_data: Input data to validate
 
         Returns:
-            The tool if found, None otherwise
+            True if input is valid, False otherwise
         """
-        return self._tools.get(tool_name)
+        tool = self.get_tool(name)
+        if not tool or not tool.input_model:
+            return False
 
-    def list_tools(self) -> List[Dict[str, Any]]:
-        """
-        List all registered tools with their descriptions.
+        try:
+            tool.input_model(**input_data)
+            return True
+        except Exception as e:
+            self.logger.error(f"Invalid input for tool {name}: {str(e)}")
+            return False
 
-        Returns:
-            List of tool descriptions
+    def get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
         """
-        return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "version": tool.version
-            }
-            for tool in self._tools.values()
-        ]
+        Get the input schema for a tool.
 
-    def get_tool_count(self) -> int:
-        """
-        Get the number of registered tools.
+        Args:
+            name: Name of the tool
 
         Returns:
-            Number of registered tools
+            Tool input schema or None if not found
         """
-        return len(self._tools) 
+        tool = self.get_tool(name)
+        if not tool or not tool.input_model:
+            return None
+
+        return tool.input_model.schema() 

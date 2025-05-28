@@ -1,25 +1,33 @@
+from typing import Dict, Any, List, Optional, Protocol
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, Field
+
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-@dataclass
-class SearchResult:
-    """Class representing a search result."""
-    title: str
-    url: str
-    snippet: str
-    source: str
-    metadata: Dict[str, Any]
+class SearchResult(BaseModel):
+    """Model for search results."""
+    title: str = Field(..., description="Title of the result")
+    url: str = Field(..., description="URL of the result")
+    snippet: str = Field(..., description="Text snippet from the result")
+    source: str = Field(..., description="Source of the result")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+class SearchOptions(BaseModel):
+    """Model for search options."""
+    max_results: int = Field(default=10, description="Maximum number of results to return")
+    timeout: int = Field(default=30, description="Timeout in seconds")
+    filters: Dict[str, Any] = Field(default_factory=dict, description="Search filters")
+    sort_by: Optional[str] = Field(default=None, description="Sort field")
+    sort_order: str = Field(default="desc", description="Sort order (asc/desc)")
 
 class BaseSearcher(ABC):
-    """Base class for search implementations."""
+    """Base class for all search implementations."""
 
     def __init__(self, name: str, description: str):
         """
-        Initialize the base searcher.
+        Initialize the searcher.
 
         Args:
             name: Name of the searcher
@@ -27,30 +35,36 @@ class BaseSearcher(ABC):
         """
         self.name = name
         self.description = description
-        self.logger = get_logger(f"search.{name}")
+        self.logger = get_logger(f"searcher.{name}")
 
     @abstractmethod
     async def search(
         self,
         query: str,
-        max_results: int = 10,
-        filters: Optional[Dict[str, Any]] = None
+        options: Optional[SearchOptions] = None
     ) -> List[SearchResult]:
         """
         Perform a search.
 
         Args:
-            query: Search query string
-            max_results: Maximum number of results to return
-            filters: Optional search filters
+            query: Search query
+            options: Optional search options
 
         Returns:
             List of search results
+
+        Raises:
+            ValueError: If query is invalid
+            Exception: For other search errors
         """
         pass
 
     @abstractmethod
-    async def validate_query(self, query: str) -> bool:
+    async def close(self) -> None:
+        """Close the searcher and clean up resources."""
+        pass
+
+    def validate_query(self, query: str) -> bool:
         """
         Validate a search query.
 
@@ -60,30 +74,44 @@ class BaseSearcher(ABC):
         Returns:
             True if query is valid, False otherwise
         """
-        pass
+        if not query or not isinstance(query, str):
+            return False
+        return len(query.strip()) > 0
 
-    @abstractmethod
-    async def close(self):
-        """Close any resources used by the searcher."""
-        pass
-
-    def format_result(self, result: SearchResult) -> Dict[str, Any]:
+    def format_result(self, result: Dict[str, Any]) -> SearchResult:
         """
-        Format a search result for API response.
+        Format a raw result into a SearchResult.
 
         Args:
-            result: Search result to format
+            result: Raw result data
 
         Returns:
-            Formatted result dictionary
+            Formatted SearchResult
         """
-        return {
-            "title": result.title,
-            "url": result.url,
-            "snippet": result.snippet,
-            "source": result.source,
-            "metadata": result.metadata
-        }
+        try:
+            return SearchResult(
+                title=result.get("title", ""),
+                url=result.get("url", ""),
+                snippet=result.get("snippet", ""),
+                source=self.name,
+                metadata=result.get("metadata", {})
+            )
+        except Exception as e:
+            self.logger.error(f"Error formatting result: {str(e)}")
+            raise
+
+    def __str__(self) -> str:
+        """String representation of the searcher."""
+        return f"{self.name}: {self.description}"
+
+    def __repr__(self) -> str:
+        """Detailed string representation of the searcher."""
+        return (
+            f"{self.__class__.__name__}("
+            f"name='{self.name}', "
+            f"description='{self.description}'"
+            ")"
+        )
 
     async def execute(
         self,
