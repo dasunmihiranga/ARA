@@ -1,255 +1,313 @@
-from typing import Dict, Any, List, Optional, Union
-from pydantic import BaseModel, Field
+from typing import Dict, Any, List, Optional
+import spacy
+from gensim import corpora, models
 import numpy as np
+from datetime import datetime
+import re
 from collections import Counter
 
-from research_assistant.llm.model_manager import ModelManager
-from research_assistant.llm.prompt_templates import PromptTemplateManager
+from research_assistant.analysis.base_analyzer import BaseAnalyzer, AnalysisResult, AnalysisOptions
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class Topic(BaseModel):
-    """Model for topic analysis results."""
-    name: str = Field(..., description="Topic name")
-    keywords: List[str] = Field(..., description="Key terms associated with the topic")
-    score: float = Field(..., description="Topic relevance score (0.0 to 1.0)")
-    examples: List[str] = Field(default_factory=list, description="Example phrases for the topic")
-
-class TopicModelResult(BaseModel):
-    """Model for topic modeling results."""
-    topics: List[Topic] = Field(..., description="Identified topics")
-    document_topics: List[Dict[str, float]] = Field(..., description="Topic distribution for each document")
-    coherence_score: float = Field(..., description="Topic coherence score")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
-
-class TopicModeler:
-    """Modeler for text topics."""
+class TopicModeler(BaseAnalyzer):
+    """Identifies and analyzes topics in content using LDA."""
 
     def __init__(
         self,
-        model_name: str = "mistral",
-        config_path: Optional[str] = None,
+        model_name: str = "en_core_web_sm",
         num_topics: int = 5,
+        passes: int = 10,
         min_topic_size: int = 3
     ):
         """
         Initialize the topic modeler.
 
         Args:
-            model_name: Name of the model to use
-            config_path: Path to the configuration file
-            num_topics: Number of topics to identify
-            min_topic_size: Minimum number of documents per topic
+            model_name: Name of the spaCy model to use
+            num_topics: Number of topics to extract
+            passes: Number of passes for LDA training
+            min_topic_size: Minimum number of words per topic
         """
+        super().__init__(
+            name="topic_modeler",
+            description="Identify and analyze topics in content"
+        )
         self.model_name = model_name
-        self.model_manager = ModelManager(config_path)
-        self.template_manager = PromptTemplateManager()
         self.num_topics = num_topics
+        self.passes = passes
         self.min_topic_size = min_topic_size
-        self.logger = get_logger("topic_modeler")
+        self.nlp = None
+        self._load_model()
+
+    def _load_model(self) -> None:
+        """Load the spaCy model."""
+        try:
+            self.nlp = spacy.load(self.model_name)
+        except OSError:
+            self.logger.info(f"Downloading spaCy model: {self.model_name}")
+            spacy.cli.download(self.model_name)
+            self.nlp = spacy.load(self.model_name)
 
     async def analyze(
         self,
-        documents: List[str],
-        num_topics: Optional[int] = None,
-        min_topic_size: Optional[int] = None
-    ) -> TopicModelResult:
+        content: str,
+        options: Optional[AnalysisOptions] = None
+    ) -> AnalysisResult:
         """
-        Analyze topics in documents.
+        Identify topics in the content.
 
         Args:
-            documents: List of documents to analyze
-            num_topics: Optional number of topics to identify
-            min_topic_size: Optional minimum topic size
+            content: Content to analyze
+            options: Optional analysis options
 
         Returns:
-            TopicModelResult object
+            Analysis result with topics
+
+        Raises:
+            ValueError: If content is invalid
+            Exception: For other analysis errors
         """
+        if not await self.validate_content(content):
+            raise ValueError("Invalid content for topic modeling")
+
+        options = options or AnalysisOptions()
+
         try:
-            # Load model
-            model = await self.model_manager.load_model(self.model_name)
-            if not model:
-                raise ValueError(f"Failed to load model: {self.model_name}")
+            # Process content with spaCy
+            doc = self.nlp(content)
 
-            # Set parameters
-            num_topics = num_topics or self.num_topics
-            min_topic_size = min_topic_size or self.min_topic_size
+            # Extract and preprocess text
+            sentences = [sent.text.strip() for sent in doc.sents]
+            if not sentences:
+                return self.format_result({
+                    "content": content,
+                    "topics": [],
+                    "metadata": {"num_sentences": 0},
+                    "confidence": 1.0
+                })
 
-            # Prepare prompt
-            prompt = self._prepare_prompt(documents, num_topics, min_topic_size)
+            # Prepare documents for LDA
+            processed_docs = self._preprocess_documents(sentences)
+            if not processed_docs:
+                return self.format_result({
+                    "content": content,
+                    "topics": [],
+                    "metadata": {"num_sentences": len(sentences)},
+                    "confidence": 1.0
+                })
 
-            # Generate analysis
-            response = await model.generate(
-                prompt=prompt,
-                temperature=0.3,
-                max_tokens=2000
+            # Create dictionary and corpus
+            dictionary = corpora.Dictionary(processed_docs)
+            corpus = [dictionary.doc2bow(doc) for doc in processed_docs]
+
+            # Train LDA model
+            lda_model = models.LdaModel(
+                corpus=corpus,
+                num_topics=self.num_topics,
+                id2word=dictionary,
+                passes=self.passes
             )
 
-            # Parse response
-            result = self._parse_response(response)
+            # Extract topics
+            topics = self._extract_topics(lda_model, dictionary)
+            topic_distribution = self._calculate_topic_distribution(lda_model, corpus)
+            coherence = self._calculate_coherence(lda_model, corpus, dictionary)
 
-            # Calculate document-topic distribution
-            doc_topics = self._calculate_document_topics(documents, result["topics"])
-
-            # Calculate coherence score
-            coherence = self._calculate_coherence(result["topics"])
-
-            return TopicModelResult(
-                topics=[Topic(**topic) for topic in result["topics"]],
-                document_topics=doc_topics,
-                coherence_score=coherence,
-                metadata=result.get("metadata", {})
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error analyzing topics: {str(e)}")
-            raise
-
-    def _prepare_prompt(
-        self,
-        documents: List[str],
-        num_topics: int,
-        min_topic_size: int
-    ) -> str:
-        """
-        Prepare the analysis prompt.
-
-        Args:
-            documents: List of documents
-            num_topics: Number of topics
-            min_topic_size: Minimum topic size
-
-        Returns:
-            Formatted prompt
-        """
-        prompt = f"""Analyze the following documents and identify {num_topics} main topics.
-Each topic should have at least {min_topic_size} documents.
-
-Documents:
-{self._format_documents(documents)}
-
-For each topic, provide:
-1. Topic name
-2. Key terms (at least 5)
-3. Relevance score (0.0 to 1.0)
-4. Example phrases (at least 3)
-
-Format the response as JSON with the following structure:
-{{
-    "topics": [
-        {{
-            "name": "topic name",
-            "keywords": ["term1", "term2", ...],
-            "score": 0.8,
-            "examples": ["example1", "example2", ...]
-        }},
-        ...
-    ],
-    "metadata": {{
-        "num_documents": {len(documents)},
-        "num_topics": {num_topics}
-    }}
-}}"""
-
-        return prompt
-
-    def _format_documents(self, documents: List[str]) -> str:
-        """
-        Format documents for the prompt.
-
-        Args:
-            documents: List of documents
-
-        Returns:
-            Formatted documents string
-        """
-        formatted = []
-        for i, doc in enumerate(documents, 1):
-            formatted.append(f"Document {i}:\n{doc}\n")
-        return "\n".join(formatted)
-
-    def _parse_response(self, response: str) -> Dict[str, Any]:
-        """
-        Parse the model response.
-
-        Args:
-            response: Model response
-
-        Returns:
-            Parsed topic modeling results
-        """
-        try:
-            import json
-            import re
-
-            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(1))
-
-            return json.loads(response)
+            return self.format_result({
+                "content": content,
+                "topics": topics,
+                "distribution": topic_distribution,
+                "metadata": {
+                    "model": "LDA",
+                    "num_topics": len(topics),
+                    "num_sentences": len(sentences),
+                    "coherence": coherence
+                },
+                "confidence": coherence
+            })
 
         except Exception as e:
-            self.logger.error(f"Error parsing response: {str(e)}")
+            self.logger.error(f"Error modeling topics: {str(e)}")
             raise
 
-    def _calculate_document_topics(
-        self,
-        documents: List[str],
-        topics: List[Dict[str, Any]]
-    ) -> List[Dict[str, float]]:
+    async def validate_content(self, content: str) -> bool:
         """
-        Calculate topic distribution for each document.
+        Validate if the content can be analyzed.
 
         Args:
-            documents: List of documents
-            topics: List of topics
+            content: Content to validate
+
+        Returns:
+            True if content is valid, False otherwise
+        """
+        if not content or not isinstance(content, str):
+            return False
+
+        # Check minimum content length
+        if len(content.split()) < 20:
+            return False
+
+        return True
+
+    def _preprocess_documents(self, sentences: List[str]) -> List[List[str]]:
+        """
+        Preprocess documents for topic modeling.
+
+        Args:
+            sentences: List of sentences
+
+        Returns:
+            List of preprocessed documents
+        """
+        processed_docs = []
+        for sentence in sentences:
+            # Process with spaCy
+            doc = self.nlp(sentence)
+
+            # Extract tokens
+            tokens = [
+                token.lemma_.lower()
+                for token in doc
+                if not token.is_stop
+                and not token.is_punct
+                and not token.is_space
+                and len(token.text) > 2
+            ]
+
+            if len(tokens) >= self.min_topic_size:
+                processed_docs.append(tokens)
+
+        return processed_docs
+
+    def _extract_topics(
+        self,
+        lda_model: models.LdaModel,
+        dictionary: corpora.Dictionary
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract topics from the LDA model.
+
+        Args:
+            lda_model: Trained LDA model
+            dictionary: Gensim dictionary
+
+        Returns:
+            List of topics with their words and scores
+        """
+        topics = []
+        for topic_id in range(lda_model.num_topics):
+            # Get topic words
+            topic_words = lda_model.show_topic(topic_id, topn=10)
+            
+            # Calculate topic coherence
+            words = [word for word, _ in topic_words]
+            coherence = self._calculate_topic_coherence(words)
+
+            topics.append({
+                "id": topic_id,
+                "words": [
+                    {
+                        "word": word,
+                        "score": float(score)
+                    }
+                    for word, score in topic_words
+                ],
+                "coherence": coherence
+            })
+
+        return topics
+
+    def _calculate_topic_distribution(
+        self,
+        lda_model: models.LdaModel,
+        corpus: List[List[tuple]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Calculate topic distribution across documents.
+
+        Args:
+            lda_model: Trained LDA model
+            corpus: Document corpus
 
         Returns:
             List of topic distributions
         """
         distributions = []
-        for doc in documents:
-            doc_dist = {}
-            for topic in topics:
-                # Calculate similarity based on keyword overlap
-                keywords = set(topic["keywords"])
-                doc_words = set(doc.lower().split())
-                overlap = len(keywords.intersection(doc_words))
-                score = overlap / len(keywords) if keywords else 0.0
-                doc_dist[topic["name"]] = score
-            distributions.append(doc_dist)
+        for doc in corpus:
+            # Get document topics
+            doc_topics = lda_model.get_document_topics(doc)
+            
+            # Convert to dictionary
+            topic_dist = {
+                topic_id: float(score)
+                for topic_id, score in doc_topics
+            }
+            
+            distributions.append(topic_dist)
+
         return distributions
 
-    def _calculate_coherence(self, topics: List[Dict[str, Any]]) -> float:
+    def _calculate_coherence(
+        self,
+        lda_model: models.LdaModel,
+        corpus: List[List[tuple]],
+        dictionary: corpora.Dictionary
+    ) -> float:
         """
-        Calculate topic coherence score.
+        Calculate model coherence score.
 
         Args:
-            topics: List of topics
+            lda_model: Trained LDA model
+            corpus: Document corpus
+            dictionary: Gensim dictionary
 
         Returns:
-            Coherence score
+            Coherence score between 0 and 1
         """
         try:
-            # Simple coherence based on keyword overlap
-            total_overlap = 0
-            total_pairs = 0
-
-            for i, topic1 in enumerate(topics):
-                for topic2 in topics[i+1:]:
-                    keywords1 = set(topic1["keywords"])
-                    keywords2 = set(topic2["keywords"])
-                    overlap = len(keywords1.intersection(keywords2))
-                    total_overlap += overlap
-                    total_pairs += 1
-
-            return 1.0 - (total_overlap / (total_pairs * 5)) if total_pairs > 0 else 0.0
-
-        except Exception as e:
-            self.logger.error(f"Error calculating coherence: {str(e)}")
+            # Calculate topic coherence
+            coherence_model = models.CoherenceModel(
+                model=lda_model,
+                texts=corpus,
+                dictionary=dictionary,
+                coherence='c_v'
+            )
+            coherence = coherence_model.get_coherence()
+            return min(max(coherence, 0.0), 1.0)
+        except:
             return 0.0
 
-    async def close(self):
+    def _calculate_topic_coherence(self, words: List[str]) -> float:
+        """
+        Calculate coherence for a single topic.
+
+        Args:
+            words: List of topic words
+
+        Returns:
+            Coherence score between 0 and 1
+        """
+        if not words:
+            return 0.0
+
+        # Simple word co-occurrence based coherence
+        co_occurrences = 0
+        total_pairs = 0
+
+        for i in range(len(words)):
+            for j in range(i + 1, len(words)):
+                total_pairs += 1
+                # Check if words appear together in any sentence
+                if any(
+                    words[i] in sent.lower() and words[j] in sent.lower()
+                    for sent in self.nlp.vocab.strings
+                ):
+                    co_occurrences += 1
+
+        return co_occurrences / total_pairs if total_pairs > 0 else 0.0
+
+    async def close(self) -> None:
         """Close the topic modeler."""
-        await self.model_manager.close() 
+        self.nlp = None 

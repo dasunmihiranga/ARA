@@ -1,138 +1,107 @@
 from typing import Dict, Any, List, Optional
+import aiohttp
+import asyncio
 from datetime import datetime
+import re
+from urllib.parse import quote_plus
 
-from research_assistant.analysis.base_analyzer import BaseAnalyzer, AnalysisResult
-from research_assistant.search.search_factory import SearchFactory
-from research_assistant.extraction.extraction_factory import ExtractionFactory
-from research_assistant.llm.ollama_client import OllamaClient
+from research_assistant.analysis.base_analyzer import BaseAnalyzer, AnalysisResult, AnalysisOptions
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 class FactChecker(BaseAnalyzer):
-    """Analyzer for verifying claims across multiple sources."""
+    """Verifies factual claims in content using external sources."""
 
     def __init__(
         self,
-        model_name: str = "mistral",
-        max_sources: int = 5,
-        min_confidence: float = 0.7
+        api_key: Optional[str] = None,
+        max_claims: int = 10,
+        min_confidence: float = 0.5
     ):
         """
         Initialize the fact checker.
 
         Args:
-            model_name: Name of the Ollama model to use
-            max_sources: Maximum number of sources to check
-            min_confidence: Minimum confidence threshold
+            api_key: API key for fact checking service
+            max_claims: Maximum number of claims to check
+            min_confidence: Minimum confidence threshold for claims
         """
         super().__init__(
             name="fact_checker",
-            description="Verify claims across multiple sources"
+            description="Verify factual claims in content"
         )
-        self.model_name = model_name
-        self.max_sources = max_sources
+        self.api_key = api_key
+        self.max_claims = max_claims
         self.min_confidence = min_confidence
-        self.ollama = OllamaClient(model_name=model_name)
-        self.search_factory = SearchFactory()
-        self.extraction_factory = ExtractionFactory()
+        self.session = None
+
+    async def _ensure_session(self) -> None:
+        """Ensure aiohttp session is available."""
+        if not self.session:
+            self.session = aiohttp.ClientSession()
 
     async def analyze(
         self,
         content: str,
-        options: Optional[Dict[str, Any]] = None
+        options: Optional[AnalysisOptions] = None
     ) -> AnalysisResult:
         """
-        Verify claims in the given content.
+        Check facts in the content.
 
         Args:
-            content: Content containing claims to verify
-            options: Optional verification options including:
-                - max_sources: Maximum number of sources to check
-                - min_confidence: Minimum confidence threshold
-                - search_engines: List of search engines to use
-                - verification_depth: Depth of verification (basic, detailed)
+            content: Content to analyze
+            options: Optional analysis options
 
         Returns:
-            Analysis result containing verification results
+            Analysis result with fact checks
+
+        Raises:
+            ValueError: If content is invalid
+            Exception: For other analysis errors
         """
+        if not await self.validate_content(content):
+            raise ValueError("Invalid content for fact checking")
+
+        options = options or AnalysisOptions()
+
         try:
-            # Validate content
-            if not await self.validate_content(content):
-                raise ValueError("Invalid content for fact checking")
-
-            # Get options
-            options = options or {}
-            max_sources = options.get("max_sources", self.max_sources)
-            min_confidence = options.get("min_confidence", self.min_confidence)
-            search_engines = options.get("search_engines", ["duckduckgo", "searx"])
-            verification_depth = options.get("verification_depth", "basic")
-
-            # Extract claims
-            claims = await self._extract_claims(content)
+            # Extract claims from content
+            claims = self._extract_claims(content)
             if not claims:
-                return AnalysisResult(
-                    content="No verifiable claims found in the content.",
-                    metadata={"status": "no_claims"}
-                )
+                return self.format_result({
+                    "content": content,
+                    "claims": [],
+                    "metadata": {"num_claims": 0},
+                    "confidence": 1.0
+                })
 
-            # Verify each claim
-            verification_results = []
-            for claim in claims:
-                result = await self._verify_claim(
-                    claim=claim,
-                    max_sources=max_sources,
-                    min_confidence=min_confidence,
-                    search_engines=search_engines,
-                    verification_depth=verification_depth
-                )
-                verification_results.append(result)
+            # Limit number of claims
+            claims = claims[:self.max_claims]
 
-            # Generate verification report
-            report = await self._generate_report(verification_results)
-            metadata = {
-                "model": self.model_name,
-                "max_sources": max_sources,
-                "min_confidence": min_confidence,
-                "search_engines": search_engines,
-                "verification_depth": verification_depth,
-                "total_claims": len(claims),
-                "verified_claims": sum(1 for r in verification_results if r["verified"]),
-                "verification_time": datetime.utcnow().isoformat()
-            }
-
-            return AnalysisResult(
-                content=report,
-                metadata=metadata
-            )
-
-        except Exception as e:
-            logger.error(f"Error in fact checking: {str(e)}")
-            raise
-
-    async def batch_analyze(
-        self,
-        contents: List[str],
-        options: Optional[Dict[str, Any]] = None
-    ) -> List[AnalysisResult]:
-        """
-        Verify claims in multiple contents.
-
-        Args:
-            contents: List of contents to verify
-            options: Optional verification options
-
-        Returns:
-            List of analysis results containing verification results
-        """
-        try:
+            # Check each claim
             results = []
-            for content in contents:
-                result = await self.analyze(content, options)
-                results.append(result)
-            return results
+            for claim in claims:
+                result = await self._check_claim(claim)
+                if result["confidence"] >= self.min_confidence:
+                    results.append(result)
+
+            # Calculate overall confidence
+            confidence = self._calculate_confidence(results)
+
+            return self.format_result({
+                "content": content,
+                "claims": results,
+                "metadata": {
+                    "num_claims": len(results),
+                    "num_verified": sum(1 for r in results if r["verified"]),
+                    "num_disputed": sum(1 for r in results if not r["verified"])
+                },
+                "confidence": confidence
+            })
+
         except Exception as e:
-            logger.error(f"Error in batch fact checking: {str(e)}")
+            self.logger.error(f"Error checking facts: {str(e)}")
             raise
 
     async def validate_content(self, content: str) -> bool:
@@ -147,146 +116,200 @@ class FactChecker(BaseAnalyzer):
         """
         if not content or not isinstance(content, str):
             return False
-        if len(content.strip()) < 20:  # Minimum content length
+
+        # Check minimum content length
+        if len(content.split()) < 10:
             return False
+
         return True
 
-    async def close(self):
-        """Close the fact checker and release resources."""
-        try:
-            await self.ollama.close()
-            await self.search_factory.close_all()
-            await self.extraction_factory.close_all()
-        except Exception as e:
-            logger.error(f"Error closing fact checker: {str(e)}")
-
-    async def _extract_claims(self, content: str) -> List[str]:
+    def _extract_claims(self, content: str) -> List[Dict[str, Any]]:
         """
-        Extract verifiable claims from content.
+        Extract factual claims from content.
 
         Args:
-            content: Content to extract claims from
+            content: Content to analyze
 
         Returns:
-            List of extracted claims
+            List of claims with context
         """
-        prompt = f"""Extract verifiable factual claims from the following content. Each claim should be a complete statement that can be verified against external sources.
+        claims = []
+        sentences = re.split(r'[.!?]+', content)
 
-Content:
-{content}
+        for i, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
 
-Claims:"""
-        
-        response = await self.ollama.generate(prompt=prompt)
-        claims = [claim.strip() for claim in response.split("\n") if claim.strip()]
+            # Look for factual statements
+            if any(pattern in sentence.lower() for pattern in [
+                "is", "are", "was", "were", "has", "have", "had",
+                "according to", "research shows", "studies show",
+                "experts say", "scientists found"
+            ]):
+                # Get context (previous and next sentences)
+                context = []
+                if i > 0:
+                    context.append(sentences[i-1].strip())
+                if i < len(sentences) - 1:
+                    context.append(sentences[i+1].strip())
+
+                claims.append({
+                    "text": sentence,
+                    "context": context,
+                    "start": content.find(sentence),
+                    "end": content.find(sentence) + len(sentence)
+                })
+
         return claims
 
-    async def _verify_claim(
+    async def _check_claim(self, claim: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Check a single claim against external sources.
+
+        Args:
+            claim: Claim to check
+
+        Returns:
+            Dictionary with verification results
+        """
+        try:
+            await self._ensure_session()
+
+            # Prepare search query
+            query = quote_plus(claim["text"])
+            url = f"https://api.factcheck.org/v1/claims?q={query}"
+
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            async with self.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return self._process_verification(data, claim)
+                else:
+                    return self._fallback_verification(claim)
+
+        except Exception as e:
+            self.logger.error(f"Error checking claim: {str(e)}")
+            return self._fallback_verification(claim)
+
+    def _process_verification(
         self,
-        claim: str,
-        max_sources: int,
-        min_confidence: float,
-        search_engines: List[str],
-        verification_depth: str
+        data: Dict[str, Any],
+        claim: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Verify a single claim against multiple sources.
+        Process verification results from API.
+
+        Args:
+            data: API response data
+            claim: Original claim
+
+        Returns:
+            Processed verification result
+        """
+        if not data.get("claims"):
+            return self._fallback_verification(claim)
+
+        # Get best matching claim
+        best_match = max(
+            data["claims"],
+            key=lambda x: self._calculate_similarity(claim["text"], x["text"])
+        )
+
+        return {
+            "text": claim["text"],
+            "context": claim["context"],
+            "verified": best_match["rating"] in ["true", "mostly_true"],
+            "rating": best_match["rating"],
+            "explanation": best_match.get("explanation", ""),
+            "sources": best_match.get("sources", []),
+            "confidence": self._calculate_similarity(claim["text"], best_match["text"]),
+            "start": claim["start"],
+            "end": claim["end"]
+        }
+
+    def _fallback_verification(self, claim: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fallback verification when API is unavailable.
 
         Args:
             claim: Claim to verify
-            max_sources: Maximum number of sources to check
-            min_confidence: Minimum confidence threshold
-            search_engines: List of search engines to use
-            verification_depth: Depth of verification
 
         Returns:
-            Dictionary containing verification results
+            Basic verification result
         """
-        # Search for sources
-        sources = []
-        for engine in search_engines:
-            searcher = self.search_factory.get_searcher(engine)
-            if searcher:
-                results = await searcher.search(claim, limit=max_sources)
-                sources.extend(results)
-
-        # Extract content from sources
-        source_contents = []
-        for source in sources:
-            extractor = self.extraction_factory.get_extractor("web")
-            if extractor:
-                try:
-                    content = await extractor.extract(source.url)
-                    source_contents.append({
-                        "url": source.url,
-                        "content": content.content,
-                        "metadata": content.metadata
-                    })
-                except Exception as e:
-                    logger.error(f"Error extracting content from {source.url}: {str(e)}")
-
-        # Verify claim against sources
-        verification_prompt = f"""Verify the following claim against the provided sources. Provide a confidence score (0-1) and explain your reasoning.
-
-Claim: {claim}
-
-Sources:
-{self._format_sources(source_contents)}
-
-Verification:"""
-        
-        response = await self.ollama.generate(prompt=verification_prompt)
-        
-        # Parse verification result
-        try:
-            confidence = float(response.split("Confidence:")[1].split("\n")[0].strip())
-            explanation = response.split("Explanation:")[1].strip()
-        except:
-            confidence = 0.0
-            explanation = "Failed to parse verification result"
-
         return {
-            "claim": claim,
-            "verified": confidence >= min_confidence,
-            "confidence": confidence,
-            "explanation": explanation,
-            "sources": source_contents
+            "text": claim["text"],
+            "context": claim["context"],
+            "verified": None,
+            "rating": "unknown",
+            "explanation": "Unable to verify claim",
+            "sources": [],
+            "confidence": 0.0,
+            "start": claim["start"],
+            "end": claim["end"]
         }
 
-    async def _generate_report(self, verification_results: List[Dict[str, Any]]) -> str:
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
         """
-        Generate a verification report.
+        Calculate similarity between two texts.
 
         Args:
-            verification_results: List of verification results
+            text1: First text
+            text2: Second text
 
         Returns:
-            Formatted verification report
+            Similarity score between 0 and 1
         """
-        report = "Fact Checking Report\n\n"
+        # Simple word overlap similarity
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
         
-        for i, result in enumerate(verification_results, 1):
-            report += f"Claim {i}: {result['claim']}\n"
-            report += f"Status: {'Verified' if result['verified'] else 'Not Verified'}\n"
-            report += f"Confidence: {result['confidence']:.2f}\n"
-            report += f"Explanation: {result['explanation']}\n"
-            report += f"Sources: {len(result['sources'])}\n\n"
+        if not words1 or not words2:
+            return 0.0
 
-        return report
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union)
 
-    def _format_sources(self, sources: List[Dict[str, Any]]) -> str:
+    def _calculate_confidence(self, results: List[Dict[str, Any]]) -> float:
         """
-        Format sources for verification prompt.
+        Calculate overall confidence in fact checking.
 
         Args:
-            sources: List of source contents
+            results: List of verification results
 
         Returns:
-            Formatted source string
+            Confidence score between 0 and 1
         """
-        formatted = ""
-        for i, source in enumerate(sources, 1):
-            formatted += f"Source {i}:\n"
-            formatted += f"URL: {source['url']}\n"
-            formatted += f"Content: {source['content'][:500]}...\n\n"
-        return formatted 
+        if not results:
+            return 1.0
+
+        # Factors that increase confidence:
+        # - Number of claims checked
+        # - Average confidence of individual checks
+        # - Proportion of verified claims
+        confidence = 0.0
+
+        # Number of claims factor
+        confidence += min(len(results) / self.max_claims, 1.0) * 0.3
+
+        # Average confidence factor
+        avg_confidence = sum(r["confidence"] for r in results) / len(results)
+        confidence += avg_confidence * 0.4
+
+        # Verification rate factor
+        verified_rate = sum(1 for r in results if r["verified"] is not None) / len(results)
+        confidence += verified_rate * 0.3
+
+        return min(confidence, 1.0)
+
+    async def close(self) -> None:
+        """Close the fact checker."""
+        if self.session:
+            await self.session.close()
+            self.session = None 
