@@ -1,6 +1,6 @@
 # AI Research Assistant MCP
 
-An AI-powered research assistant using MCP (Machine Conversation Protocol) for advanced research capabilities. 
+An AI-powered research assistant using MCP (Model Context Protocol) for advanced research capabilities. 
 
 ## 1. Introduction
 
