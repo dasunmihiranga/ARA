@@ -13,4 +13,84 @@ models:
     - name: codellama
       description: "Code-specific Llama model"
       context_window: 4096
-      temperature: 0.2 
+      temperature: 0.2
+
+# Model configurations for the AI Research Assistant
+
+# Default model settings
+default:
+  model_name: "mistral"
+  timeout: 30
+  temperature: 0.7
+  max_tokens: 2000
+  stop_sequences: []
+
+# Model-specific configurations
+models:
+  mistral:
+    description: "Mistral 7B model for general research tasks"
+    timeout: 30
+    temperature: 0.7
+    max_tokens: 2000
+    stop_sequences: []
+    system_prompt: "You are a helpful research assistant that provides accurate and well-reasoned responses."
+
+  llama2:
+    description: "Llama 2 model for advanced research tasks"
+    timeout: 45
+    temperature: 0.6
+    max_tokens: 3000
+    stop_sequences: []
+    system_prompt: "You are an expert research assistant with deep knowledge across multiple domains."
+
+  codellama:
+    description: "CodeLlama model for code analysis and generation"
+    timeout: 60
+    temperature: 0.2
+    max_tokens: 4000
+    stop_sequences: ["```"]
+    system_prompt: "You are a programming expert that helps with code analysis and generation."
+
+# Task-specific model assignments
+tasks:
+  summarization:
+    model: "mistral"
+    temperature: 0.5
+    max_tokens: 1000
+
+  analysis:
+    model: "llama2"
+    temperature: 0.7
+    max_tokens: 2000
+
+  fact_checking:
+    model: "llama2"
+    temperature: 0.3
+    max_tokens: 1500
+
+  code_analysis:
+    model: "codellama"
+    temperature: 0.2
+    max_tokens: 3000
+
+# Model parameters
+parameters:
+  temperature_range: [0.0, 1.0]
+  max_tokens_range: [100, 8000]
+  timeout_range: [10, 120]
+  default_chunk_size: 1000
+  default_chunk_overlap: 200
+
+# Model validation rules
+validation:
+  min_response_length: 10
+  max_response_length: 8000
+  required_fields:
+    - "content"
+    - "metadata"
+  allowed_entity_types:
+    - "url"
+    - "email"
+    - "date"
+    - "number"
+    - "percentage" 
