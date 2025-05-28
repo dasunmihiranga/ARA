@@ -9,126 +9,156 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Print with color
+# Function to print colored messages
 print_step() {
     echo -e "${GREEN}==>${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}Error:${NC} $1"
+    echo -e "${RED}ERROR:${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}Warning:${NC} $1"
+    echo -e "${YELLOW}WARNING:${NC} $1"
 }
 
-# Check if virtual environment is activated
+# Function to check if Python virtual environment is activated
 check_venv() {
     if [ -z "$VIRTUAL_ENV" ]; then
-        print_error "Virtual environment is not activated"
-        echo "Please run: source venv/bin/activate"
+        print_error "Python virtual environment is not activated"
+        print_step "Please activate the virtual environment first:"
+        echo "source venv/bin/activate  # Linux/Mac"
+        echo "venv\\Scripts\\activate   # Windows"
         exit 1
     fi
 }
 
-# Check test dependencies
+# Function to check if required packages are installed
 check_dependencies() {
     print_step "Checking test dependencies..."
     
-    # Check if pytest is installed
-    if ! python -c "import pytest" &>/dev/null; then
-        print_error "pytest not found"
-        echo "Installing pytest..."
-        pip install pytest pytest-cov pytest-asyncio pytest-mock
+    # Check pytest
+    if ! python -c "import pytest" &> /dev/null; then
+        print_error "pytest is not installed"
+        print_step "Installing pytest..."
+        pip install pytest
     fi
     
-    # Check if test requirements are installed
-    if [ -f "tests/requirements.txt" ]; then
-        print_step "Installing test requirements..."
-        pip install -r tests/requirements.txt
+    # Check pytest-cov
+    if ! python -c "import pytest_cov" &> /dev/null; then
+        print_error "pytest-cov is not installed"
+        print_step "Installing pytest-cov..."
+        pip install pytest-cov
     fi
     
-    echo "Dependencies checked"
+    # Check pytest-asyncio
+    if ! python -c "import pytest_asyncio" &> /dev/null; then
+        print_error "pytest-asyncio is not installed"
+        print_step "Installing pytest-asyncio..."
+        pip install pytest-asyncio
+    fi
+    
+    # Check pytest-mock
+    if ! python -c "import pytest_mock" &> /dev/null; then
+        print_error "pytest-mock is not installed"
+        print_step "Installing pytest-mock..."
+        pip install pytest-mock
+    fi
 }
 
-# Run unit tests
-run_unit_tests() {
-    print_step "Running unit tests..."
+# Function to run tests
+run_tests() {
+    local test_type=$1
+    local coverage=$2
     
-    pytest tests/unit \
-        --cov=src/research_assistant \
-        --cov-report=term-missing \
-        --cov-report=html \
-        -v
+    print_step "Running $test_type tests..."
+    
+    if [ "$coverage" = true ]; then
+        pytest "tests/$test_type" \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=html \
+            -v
+    else
+        pytest "tests/$test_type" -v
+    fi
 }
 
-# Run integration tests
-run_integration_tests() {
-    print_step "Running integration tests..."
-    
-    pytest tests/integration \
-        --cov=src/research_assistant \
-        --cov-append \
-        --cov-report=term-missing \
-        --cov-report=html \
-        -v
-}
-
-# Run API tests
-run_api_tests() {
-    print_step "Running API tests..."
-    
-    pytest tests/api \
-        --cov=src/research_assistant \
-        --cov-append \
-        --cov-report=term-missing \
-        --cov-report=html \
-        -v
-}
-
-# Generate coverage report
-generate_coverage_report() {
-    print_step "Generating coverage report..."
-    
-    # Combine coverage reports
-    coverage combine
-    
-    # Generate HTML report
-    coverage html -d coverage_report
-    
-    echo "Coverage report generated in coverage_report/"
-}
-
-# Clean up test artifacts
+# Function to clean up test artifacts
 cleanup() {
     print_step "Cleaning up test artifacts..."
     
     # Remove coverage data
-    rm -f .coverage*
+    rm -rf .coverage
+    rm -rf htmlcov
     
-    # Remove pytest cache
+    # Remove test cache
     rm -rf .pytest_cache
     
-    echo "Cleanup completed"
+    # Remove test data
+    rm -rf tests/data/*
 }
 
-# Main test process
+# Main function
 main() {
-    echo "Starting test process..."
-    
+    # Check virtual environment
     check_venv
+    
+    # Check dependencies
     check_dependencies
     
-    # Run all test suites
-    run_unit_tests
-    run_integration_tests
-    run_api_tests
+    # Parse command line arguments
+    local run_unit=true
+    local run_integration=true
+    local run_e2e=true
+    local with_coverage=true
     
-    generate_coverage_report
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --unit-only)
+                run_integration=false
+                run_e2e=false
+                ;;
+            --integration-only)
+                run_unit=false
+                run_e2e=false
+                ;;
+            --e2e-only)
+                run_unit=false
+                run_integration=false
+                ;;
+            --no-coverage)
+                with_coverage=false
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+        shift
+    done
+    
+    # Create test data directory
+    mkdir -p tests/data
+    
+    # Run tests
+    if [ "$run_unit" = true ]; then
+        run_tests "unit" $with_coverage
+    fi
+    
+    if [ "$run_integration" = true ]; then
+        run_tests "integration" $with_coverage
+    fi
+    
+    if [ "$run_e2e" = true ]; then
+        run_tests "e2e" $with_coverage
+    fi
+    
+    # Cleanup
     cleanup
     
-    echo -e "${GREEN}All tests completed successfully!${NC}"
+    print_step "All tests completed successfully!"
 }
 
 # Run main function
-main 
+main "$@" 
