@@ -1,28 +1,41 @@
+from typing import Dict, Any, List, Optional, Protocol
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-@dataclass
-class ExtractedContent:
-    """Class representing extracted content."""
-    title: str
-    text: str
-    source: str
-    url: Optional[str] = None
-    metadata: Dict[str, Any] = None
-    extracted_at: datetime = None
+class ExtractedContent(BaseModel):
+    """Model for extracted content."""
+    title: str = Field(..., description="Title of the content")
+    text: str = Field(..., description="Main text content")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Content metadata")
+    source: str = Field(..., description="Source of the content")
+    extraction_date: datetime = Field(default_factory=datetime.utcnow, description="Extraction timestamp")
+    language: Optional[str] = Field(default=None, description="Content language")
+    word_count: Optional[int] = Field(default=None, description="Word count")
+    char_count: Optional[int] = Field(default=None, description="Character count")
+
+class ExtractionOptions(BaseModel):
+    """Model for extraction options."""
+    timeout: int = Field(default=30, description="Timeout in seconds")
+    max_size: Optional[int] = Field(default=None, description="Maximum content size in bytes")
+    include_images: bool = Field(default=False, description="Whether to include images")
+    include_links: bool = Field(default=True, description="Whether to include links")
+    include_metadata: bool = Field(default=True, description="Whether to include metadata")
+    language: Optional[str] = Field(default=None, description="Target language")
+    clean_html: bool = Field(default=True, description="Whether to clean HTML")
+    extract_tables: bool = Field(default=False, description="Whether to extract tables")
+    extract_figures: bool = Field(default=False, description="Whether to extract figures")
 
 class BaseExtractor(ABC):
-    """Base class for content extractors."""
+    """Base class for all content extractors."""
 
     def __init__(self, name: str, description: str):
         """
-        Initialize the base extractor.
+        Initialize the extractor.
 
         Args:
             name: Name of the extractor
@@ -30,13 +43,13 @@ class BaseExtractor(ABC):
         """
         self.name = name
         self.description = description
-        self.logger = get_logger(f"extraction.{name}")
+        self.logger = get_logger(f"extractor.{name}")
 
     @abstractmethod
     async def extract(
         self,
         source: str,
-        options: Optional[Dict[str, Any]] = None
+        options: Optional[ExtractionOptions] = None
     ) -> ExtractedContent:
         """
         Extract content from a source.
@@ -47,13 +60,17 @@ class BaseExtractor(ABC):
 
         Returns:
             Extracted content
+
+        Raises:
+            ValueError: If source is invalid
+            Exception: For other extraction errors
         """
         pass
 
     @abstractmethod
     async def validate_source(self, source: str) -> bool:
         """
-        Validate if the source can be processed.
+        Validate if the source can be processed by this extractor.
 
         Args:
             source: Source to validate
@@ -64,28 +81,46 @@ class BaseExtractor(ABC):
         pass
 
     @abstractmethod
-    async def close(self):
-        """Close any resources used by the extractor."""
+    async def close(self) -> None:
+        """Close the extractor and clean up resources."""
         pass
 
-    def format_content(self, content: ExtractedContent) -> Dict[str, Any]:
+    def format_content(self, content: Dict[str, Any]) -> ExtractedContent:
         """
-        Format extracted content for API response.
+        Format raw content into an ExtractedContent object.
 
         Args:
-            content: Content to format
+            content: Raw content data
 
         Returns:
-            Formatted content dictionary
+            Formatted ExtractedContent
         """
-        return {
-            "title": content.title,
-            "text": content.text,
-            "source": content.source,
-            "url": content.url,
-            "metadata": content.metadata or {},
-            "extracted_at": content.extracted_at.isoformat() if content.extracted_at else None
-        }
+        try:
+            return ExtractedContent(
+                title=content.get("title", ""),
+                text=content.get("text", ""),
+                metadata=content.get("metadata", {}),
+                source=self.name,
+                language=content.get("language"),
+                word_count=content.get("word_count"),
+                char_count=content.get("char_count")
+            )
+        except Exception as e:
+            self.logger.error(f"Error formatting content: {str(e)}")
+            raise
+
+    def __str__(self) -> str:
+        """String representation of the extractor."""
+        return f"{self.name}: {self.description}"
+
+    def __repr__(self) -> str:
+        """Detailed string representation of the extractor."""
+        return (
+            f"{self.__class__.__name__}("
+            f"name='{self.name}', "
+            f"description='{self.description}'"
+            ")"
+        )
 
     async def execute(
         self,

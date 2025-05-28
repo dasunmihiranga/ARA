@@ -4,194 +4,277 @@ from datetime import datetime
 import os
 from pathlib import Path
 import mimetypes
+import asyncio
+import re
+import langdetect
+from pptx import Presentation
+import mammoth
+import python_pptx
 
-from research_assistant.extraction.base_extractor import BaseExtractor, ExtractedContent
+from research_assistant.extraction.base_extractor import BaseExtractor, ExtractedContent, ExtractionOptions
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 class DocumentExtractor(BaseExtractor):
-    """Document content extractor implementation."""
+    """Document content extractor implementation for Word and PowerPoint files."""
 
     def __init__(self):
         """Initialize the document extractor."""
         super().__init__(
             name="document",
-            description="Extract content from various document formats"
+            description="Extract content from Word and PowerPoint files"
         )
-        self.supported_formats = {
-            '.docx': self._extract_docx,
-            '.doc': self._extract_doc,
-            '.txt': self._extract_txt,
-            '.rtf': self._extract_rtf
-        }
 
     async def extract(
         self,
         source: str,
-        options: Optional[Dict[str, Any]] = None
+        options: Optional[ExtractionOptions] = None
     ) -> ExtractedContent:
         """
         Extract content from a document file.
 
         Args:
             source: Path to the document file
-            options: Optional extraction options including:
-                - max_size_mb: Maximum file size in MB
-                - extract_images: Whether to extract image information
-                - extract_tables: Whether to extract tables
+            options: Optional extraction options
 
         Returns:
             Extracted content
+
+        Raises:
+            ValueError: If file is invalid
+            Exception: For other extraction errors
         """
-        options = options or {}
-        max_size = options.get("max_size_mb", 10) * 1024 * 1024  # Convert to bytes
+        if not await self.validate_source(source):
+            raise ValueError(f"Invalid document file: {source}")
+
+        options = options or ExtractionOptions()
+        path = Path(source)
+        suffix = path.suffix.lower()
 
         try:
-            # Validate file size
-            file_size = os.path.getsize(source)
-            if file_size > max_size:
-                raise ValueError(f"File size exceeds maximum limit of {max_size/1024/1024}MB")
-
-            # Get file extension
-            ext = Path(source).suffix.lower()
-            if ext not in self.supported_formats:
-                raise ValueError(f"Unsupported file format: {ext}")
+            # Check file size
+            if options.max_size and path.stat().st_size > options.max_size:
+                raise ValueError(f"File size exceeds maximum limit: {path.stat().st_size} bytes")
 
             # Extract content based on file type
-            extractor = self.supported_formats[ext]
-            title, text, metadata = await extractor(source, options)
+            if suffix == '.docx':
+                content, metadata = await self._extract_docx(path, options)
+            elif suffix == '.pptx':
+                content, metadata = await self._extract_pptx(path, options)
+            else:
+                raise ValueError(f"Unsupported file type: {suffix}")
 
-            return ExtractedContent(
-                title=title,
-                text=text,
-                source="document",
-                url=source,
-                metadata=metadata,
-                extracted_at=datetime.utcnow()
-            )
+            # Clean content
+            content = self._clean_content(content)
+
+            # Detect language
+            try:
+                language = langdetect.detect(content)
+            except:
+                language = None
+
+            # Count words and characters
+            word_count = len(content.split())
+            char_count = len(content)
+
+            return self.format_content({
+                "title": metadata.get("title", path.stem),
+                "text": content,
+                "metadata": metadata,
+                "language": language,
+                "word_count": word_count,
+                "char_count": char_count
+            })
 
         except Exception as e:
-            logger.error(f"Document extraction error: {str(e)}")
+            self.logger.error(f"Error extracting from {source}: {str(e)}")
             raise
+
+    async def validate_source(self, source: str) -> bool:
+        """
+        Validate if the source is a valid document file.
+
+        Args:
+            source: File path to validate
+
+        Returns:
+            True if file is valid, False otherwise
+        """
+        try:
+            path = Path(source)
+            return (
+                path.exists() and 
+                path.is_file() and 
+                path.suffix.lower() in ['.docx', '.pptx']
+            )
+        except:
+            return False
 
     async def _extract_docx(
         self,
-        source: str,
-        options: Dict[str, Any]
-    ) -> tuple[str, str, Dict[str, Any]]:
-        """Extract content from DOCX files."""
+        path: Path,
+        options: ExtractionOptions
+    ) -> tuple[str, Dict[str, Any]]:
+        """
+        Extract content from a Word document.
+
+        Args:
+            path: Path to the Word document
+            options: Extraction options
+
+        Returns:
+            Tuple of (content, metadata)
+        """
         try:
-            doc = docx.Document(source)
+            # Load document
+            doc = docx.Document(path)
             
-            # Extract title from first paragraph or filename
-            title = doc.paragraphs[0].text if doc.paragraphs else os.path.basename(source)
-            
-            # Extract text content
-            text_content = []
-            tables = []
-            images = []
+            # Extract metadata
+            metadata = {
+                "title": "",
+                "author": "",
+                "created": None,
+                "modified": None,
+                "pages": 0,
+                "sections": len(doc.sections),
+                "tables": len(doc.tables),
+                "images": 0
+            }
+
+            # Extract core properties
+            core_props = doc.core_properties
+            if core_props:
+                metadata.update({
+                    "title": core_props.title or "",
+                    "author": core_props.author or "",
+                    "created": core_props.created,
+                    "modified": core_props.modified
+                })
+
+            # Extract content
+            content_parts = []
 
             # Extract paragraphs
             for para in doc.paragraphs:
                 if para.text.strip():
-                    text_content.append(para.text)
+                    content_parts.append(para.text)
 
             # Extract tables if requested
-            if options.get("extract_tables", True):
+            if options.extract_tables:
                 for table in doc.tables:
-                    table_data = []
+                    table_text = []
                     for row in table.rows:
-                        table_data.append([cell.text for cell in row.cells])
-                    tables.append(table_data)
+                        row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                        if row_text:
+                            table_text.append(" | ".join(row_text))
+                    if table_text:
+                        content_parts.append("\n".join(table_text))
 
-            # Extract image information if requested
-            if options.get("extract_images", False):
-                for rel in doc.part.rels.values():
-                    if "image" in rel.target_ref:
-                        images.append({
-                            "type": rel.target_ref.split('.')[-1],
-                            "path": rel.target_ref
-                        })
+            # Count images
+            for rel in doc.part.rels.values():
+                if "image" in rel.target_ref:
+                    metadata["images"] += 1
 
-            # Combine text content
-            text = "\n\n".join(text_content)
-
-            metadata = {
-                "format": "docx",
-                "num_paragraphs": len(text_content),
-                "has_tables": bool(tables),
-                "num_tables": len(tables),
-                "has_images": bool(images),
-                "num_images": len(images),
-                "extraction_options": options
-            }
-
-            return title, text, metadata
+            return "\n\n".join(content_parts), metadata
 
         except Exception as e:
-            logger.error(f"DOCX extraction error: {str(e)}")
+            self.logger.error(f"Error extracting from Word document: {str(e)}")
             raise
 
-    async def _extract_doc(
+    async def _extract_pptx(
         self,
-        source: str,
-        options: Dict[str, Any]
-    ) -> tuple[str, str, Dict[str, Any]]:
-        """Extract content from DOC files."""
-        # Note: DOC extraction requires additional libraries like antiword or textract
-        # For now, we'll raise an error
-        raise NotImplementedError("DOC extraction not implemented yet")
-
-    async def _extract_txt(
-        self,
-        source: str,
-        options: Dict[str, Any]
-    ) -> tuple[str, str, Dict[str, Any]]:
-        """Extract content from TXT files."""
-        try:
-            with open(source, 'r', encoding='utf-8') as file:
-                text = file.read()
-                title = os.path.basename(source)
-                
-                metadata = {
-                    "format": "txt",
-                    "encoding": file.encoding,
-                    "extraction_options": options
-                }
-
-                return title, text, metadata
-
-        except Exception as e:
-            logger.error(f"TXT extraction error: {str(e)}")
-            raise
-
-    async def _extract_rtf(
-        self,
-        source: str,
-        options: Dict[str, Any]
-    ) -> tuple[str, str, Dict[str, Any]]:
-        """Extract content from RTF files."""
-        # Note: RTF extraction requires additional libraries like striprtf
-        # For now, we'll raise an error
-        raise NotImplementedError("RTF extraction not implemented yet")
-
-    async def validate_source(self, source: str) -> bool:
+        path: Path,
+        options: ExtractionOptions
+    ) -> tuple[str, Dict[str, Any]]:
         """
-        Validate if the source is a supported document file.
+        Extract content from a PowerPoint presentation.
 
         Args:
-            source: Source to validate
+            path: Path to the PowerPoint file
+            options: Extraction options
 
         Returns:
-            True if source is valid, False otherwise
+            Tuple of (content, metadata)
         """
         try:
-            path = Path(source)
-            return path.exists() and path.suffix.lower() in self.supported_formats
-        except Exception:
-            return False
+            # Load presentation
+            prs = Presentation(path)
+            
+            # Extract metadata
+            metadata = {
+                "title": "",
+                "author": "",
+                "created": None,
+                "modified": None,
+                "slides": len(prs.slides),
+                "images": 0
+            }
 
-    async def close(self):
-        """No resources to close."""
-        pass 
+            # Extract core properties
+            core_props = prs.core_properties
+            if core_props:
+                metadata.update({
+                    "title": core_props.title or "",
+                    "author": core_props.author or "",
+                    "created": core_props.created,
+                    "modified": core_props.modified
+                })
+
+            # Extract content
+            content_parts = []
+
+            # Extract slides
+            for slide_num, slide in enumerate(prs.slides, 1):
+                slide_parts = [f"Slide {slide_num}:"]
+
+                # Extract shapes
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_parts.append(shape.text)
+
+                    # Count images
+                    if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+                        metadata["images"] += 1
+
+                if len(slide_parts) > 1:
+                    content_parts.append("\n".join(slide_parts))
+
+            # Extract notes if available
+            if options.include_metadata:
+                for slide_num, slide in enumerate(prs.slides, 1):
+                    if slide.has_notes_slide:
+                        notes = slide.notes_slide.notes_text_frame.text
+                        if notes.strip():
+                            content_parts.append(f"Notes for Slide {slide_num}:\n{notes}")
+
+            return "\n\n".join(content_parts), metadata
+
+        except Exception as e:
+            self.logger.error(f"Error extracting from PowerPoint: {str(e)}")
+            raise
+
+    def _clean_content(self, content: str) -> str:
+        """
+        Clean extracted content.
+
+        Args:
+            content: Raw content to clean
+
+        Returns:
+            Cleaned content
+        """
+        # Remove extra whitespace
+        content = re.sub(r'\s+', ' ', content)
+        
+        # Remove empty lines
+        content = re.sub(r'\n\s*\n', '\n', content)
+        
+        # Remove special characters
+        content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\xff]', '', content)
+        
+        return content.strip()
+
+    async def close(self) -> None:
+        """Close the document extractor."""
+        pass  # No resources to clean up 
