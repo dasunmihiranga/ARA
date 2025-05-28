@@ -1,0 +1,115 @@
+# LLM configurations
+
+# Default settings
+default:
+  model_name: "mistral"
+  base_url: "http://localhost:11434"
+  temperature: 0.7
+  max_tokens: 2000
+  timeout: 30
+
+# Model configurations
+models:
+  mistral:
+    description: "Mistral 7B model for general purpose tasks"
+    timeout: 30
+    temperature: 0.7
+    max_tokens: 2000
+    stop_sequences:
+      - "###"
+      - "Human:"
+    system_prompt: "You are a helpful AI assistant."
+
+  llama2:
+    description: "Llama 2 model for complex reasoning tasks"
+    timeout: 45
+    temperature: 0.5
+    max_tokens: 4000
+    stop_sequences:
+      - "###"
+      - "Human:"
+    system_prompt: "You are a helpful AI assistant focused on detailed analysis."
+
+  codellama:
+    description: "CodeLlama model for code-related tasks"
+    timeout: 60
+    temperature: 0.2
+    max_tokens: 4000
+    stop_sequences:
+      - "```"
+      - "###"
+    system_prompt: "You are a helpful AI assistant focused on code generation and analysis."
+
+# Task-specific model assignments
+tasks:
+  summarization:
+    model: "mistral"
+    temperature: 0.3
+    max_tokens: 1000
+    system_prompt: "You are a helpful AI assistant focused on creating concise summaries."
+
+  analysis:
+    model: "llama2"
+    temperature: 0.5
+    max_tokens: 2000
+    system_prompt: "You are a helpful AI assistant focused on detailed analysis."
+
+  fact_checking:
+    model: "mistral"
+    temperature: 0.2
+    max_tokens: 1000
+    system_prompt: "You are a helpful AI assistant focused on fact verification."
+
+  code_analysis:
+    model: "codellama"
+    temperature: 0.2
+    max_tokens: 2000
+    system_prompt: "You are a helpful AI assistant focused on code analysis."
+
+# Model parameters
+parameters:
+  temperature:
+    min: 0.0
+    max: 1.0
+    default: 0.7
+  max_tokens:
+    min: 100
+    max: 8000
+    default: 2000
+  timeout:
+    min: 10
+    max: 120
+    default: 30
+  chunk_size:
+    default: 1000
+    overlap: 200
+
+# Validation rules
+validation:
+  response:
+    min_length: 10
+    max_length: 8000
+    required_fields:
+      - "text"
+      - "model"
+      - "usage"
+  chat:
+    max_history: 10
+    max_tokens_per_message: 1000
+    required_fields:
+      - "role"
+      - "content"
+
+# Error handling
+error_handling:
+  retry_attempts: 3
+  retry_delay: 1
+  timeout_grace_period: 5
+  fallback_model: "mistral"
+
+# Resource management
+resources:
+  max_concurrent_requests: 10
+  request_queue_size: 100
+  cache_size: 1000
+  cache_ttl: 3600 
