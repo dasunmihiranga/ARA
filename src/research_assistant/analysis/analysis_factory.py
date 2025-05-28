@@ -10,7 +10,7 @@ from research_assistant.utils.logging import get_logger
 logger = get_logger(__name__)
 
 class AnalysisFactory:
-    """Factory class for creating and managing content analyzers."""
+    """Factory class for creating and managing analyzers."""
 
     def __init__(self, config_path: Optional[str] = None):
         """
@@ -57,9 +57,23 @@ class AnalysisFactory:
             config = self.config.get(analyzer_type, {})
 
             if analyzer_type == "summarizer":
-                analyzer = Summarizer()
+                model_name = config.get("model_name", "mistral")
+                max_length = config.get("max_length", 500)
+                temperature = config.get("temperature", 0.7)
+                analyzer = Summarizer(
+                    model_name=model_name,
+                    max_length=max_length,
+                    temperature=temperature
+                )
             elif analyzer_type == "fact_checker":
-                analyzer = FactChecker()
+                model_name = config.get("model_name", "mistral")
+                max_sources = config.get("max_sources", 5)
+                min_confidence = config.get("min_confidence", 0.7)
+                analyzer = FactChecker(
+                    model_name=model_name,
+                    max_sources=max_sources,
+                    min_confidence=min_confidence
+                )
             else:
                 logger.error(f"Unknown analyzer type: {analyzer_type}")
                 return None

@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 
 from research_assistant.core.tool_registry import MCPTool
@@ -9,10 +9,13 @@ logger = get_logger(__name__)
 
 class AnalysisToolInput(BaseModel):
     """Input model for the analysis tool."""
-    content: str = Field(..., description="Content to analyze")
     analyzer_type: str = Field(
-        default="summarizer",
+        ...,
         description="Type of analyzer to use (summarizer, fact_checker)"
+    )
+    content: str = Field(
+        ...,
+        description="Content to analyze"
     )
     options: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -30,7 +33,7 @@ class AnalysisTool(MCPTool):
             config_path: Path to the analysis configuration file
         """
         super().__init__(
-            name="analyze",
+            name="analysis",
             description="Analyze content using various analyzers",
             version="1.0.0"
         )
@@ -55,19 +58,20 @@ class AnalysisTool(MCPTool):
             if not analyzer:
                 raise ValueError(f"Failed to create analyzer of type {analysis_input.analyzer_type}")
 
-            # Analyze content
+            # Execute analysis
             result = await analyzer.analyze(
                 content=analysis_input.content,
                 options=analysis_input.options
             )
 
-            # Format result
-            formatted_result = analyzer.format_result(result)
-
             return {
                 "status": "success",
-                "result": formatted_result,
-                "analyzer": analysis_input.analyzer_type
+                "analyzer_type": analysis_input.analyzer_type,
+                "result": {
+                    "content": result.content,
+                    "metadata": result.metadata,
+                    "created_at": result.created_at.isoformat()
+                }
             }
 
         except Exception as e:

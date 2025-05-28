@@ -1,57 +1,41 @@
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
-import re
-from langchain_community.llms import Ollama
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
 
 from research_assistant.analysis.base_analyzer import BaseAnalyzer, AnalysisResult
+from research_assistant.search.search_factory import SearchFactory
+from research_assistant.extraction.extraction_factory import ExtractionFactory
+from research_assistant.llm.ollama_client import OllamaClient
 from research_assistant.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 class FactChecker(BaseAnalyzer):
-    """Fact checking analyzer implementation."""
+    """Analyzer for verifying claims across multiple sources."""
 
-    def __init__(self):
-        """Initialize the fact checker."""
+    def __init__(
+        self,
+        model_name: str = "mistral",
+        max_sources: int = 5,
+        min_confidence: float = 0.7
+    ):
+        """
+        Initialize the fact checker.
+
+        Args:
+            model_name: Name of the Ollama model to use
+            max_sources: Maximum number of sources to check
+            min_confidence: Minimum confidence threshold
+        """
         super().__init__(
             name="fact_checker",
-            description="Verify factual claims in text content"
+            description="Verify claims across multiple sources"
         )
-        self.llm = Ollama(model="mistral")
-        self.claim_template = PromptTemplate(
-            input_variables=["text"],
-            template="""
-            Extract factual claims from the following text. For each claim:
-            1. Identify if it's a verifiable fact
-            2. Note any specific numbers, dates, or statistics
-            3. Highlight any causal relationships or comparisons
-
-            Text: {text}
-
-            Format each claim as a JSON object with:
-            - claim: The factual statement
-            - type: Type of claim (statistic, date, comparison, etc.)
-            - confidence: Confidence level (high, medium, low)
-            """
-        )
-        self.verification_template = PromptTemplate(
-            input_variables=["claim"],
-            template="""
-            Verify the following claim and provide:
-            1. Whether it's likely true, false, or uncertain
-            2. Reasoning for the assessment
-            3. What additional information would be needed for certainty
-
-            Claim: {claim}
-
-            Format the response as a JSON object with:
-            - verdict: true/false/uncertain
-            - reasoning: Explanation
-            - needed_info: Additional information needed
-            """
-        )
+        self.model_name = model_name
+        self.max_sources = max_sources
+        self.min_confidence = min_confidence
+        self.ollama = OllamaClient(model_name=model_name)
+        self.search_factory = SearchFactory()
+        self.extraction_factory = ExtractionFactory()
 
     async def analyze(
         self,
@@ -59,124 +43,250 @@ class FactChecker(BaseAnalyzer):
         options: Optional[Dict[str, Any]] = None
     ) -> AnalysisResult:
         """
-        Check facts in the content.
+        Verify claims in the given content.
 
         Args:
-            content: Content to analyze
-            options: Optional fact checking options including:
-                - min_confidence: Minimum confidence level to include
-                - max_claims: Maximum number of claims to check
+            content: Content containing claims to verify
+            options: Optional verification options including:
+                - max_sources: Maximum number of sources to check
+                - min_confidence: Minimum confidence threshold
+                - search_engines: List of search engines to use
+                - verification_depth: Depth of verification (basic, detailed)
 
         Returns:
-            Analysis result containing fact checks
+            Analysis result containing verification results
         """
-        options = options or {}
-        min_confidence = options.get("min_confidence", "medium")
-        max_claims = options.get("max_claims", 5)
-
         try:
-            # Extract claims
-            claim_chain = LLMChain(llm=self.llm, prompt=self.claim_template)
-            claims_response = await claim_chain.arun(text=content)
-            
-            # Parse claims
-            claims = self._parse_claims(claims_response)
-            
-            # Filter claims by confidence
-            confidence_levels = {"high": 3, "medium": 2, "low": 1}
-            min_level = confidence_levels.get(min_confidence.lower(), 2)
-            claims = [
-                c for c in claims 
-                if confidence_levels.get(c.get("confidence", "").lower(), 0) >= min_level
-            ][:max_claims]
+            # Validate content
+            if not await self.validate_content(content):
+                raise ValueError("Invalid content for fact checking")
 
-            # Verify claims
-            verification_chain = LLMChain(llm=self.llm, prompt=self.verification_template)
-            facts = []
-            
+            # Get options
+            options = options or {}
+            max_sources = options.get("max_sources", self.max_sources)
+            min_confidence = options.get("min_confidence", self.min_confidence)
+            search_engines = options.get("search_engines", ["duckduckgo", "searx"])
+            verification_depth = options.get("verification_depth", "basic")
+
+            # Extract claims
+            claims = await self._extract_claims(content)
+            if not claims:
+                return AnalysisResult(
+                    content="No verifiable claims found in the content.",
+                    metadata={"status": "no_claims"}
+                )
+
+            # Verify each claim
+            verification_results = []
             for claim in claims:
-                verification = await verification_chain.arun(claim=claim["claim"])
-                fact = self._parse_verification(verification)
-                if fact:
-                    facts.append({
-                        "claim": claim["claim"],
-                        "type": claim["type"],
-                        "verification": fact
-                    })
+                result = await self._verify_claim(
+                    claim=claim,
+                    max_sources=max_sources,
+                    min_confidence=min_confidence,
+                    search_engines=search_engines,
+                    verification_depth=verification_depth
+                )
+                verification_results.append(result)
+
+            # Generate verification report
+            report = await self._generate_report(verification_results)
+            metadata = {
+                "model": self.model_name,
+                "max_sources": max_sources,
+                "min_confidence": min_confidence,
+                "search_engines": search_engines,
+                "verification_depth": verification_depth,
+                "total_claims": len(claims),
+                "verified_claims": sum(1 for r in verification_results if r["verified"]),
+                "verification_time": datetime.utcnow().isoformat()
+            }
 
             return AnalysisResult(
-                content=content,
-                facts=facts,
-                metadata={
-                    "min_confidence": min_confidence,
-                    "max_claims": max_claims,
-                    "claims_checked": len(facts),
-                    "confidence_levels": confidence_levels
-                },
-                analyzed_at=datetime.utcnow()
+                content=report,
+                metadata=metadata
             )
 
         except Exception as e:
-            logger.error(f"Fact checking error: {str(e)}")
+            logger.error(f"Error in fact checking: {str(e)}")
             raise
 
-    def _parse_claims(self, response: str) -> List[Dict[str, Any]]:
+    async def batch_analyze(
+        self,
+        contents: List[str],
+        options: Optional[Dict[str, Any]] = None
+    ) -> List[AnalysisResult]:
         """
-        Parse claims from LLM response.
+        Verify claims in multiple contents.
 
         Args:
-            response: LLM response containing claims
+            contents: List of contents to verify
+            options: Optional verification options
 
         Returns:
-            List of parsed claims
+            List of analysis results containing verification results
         """
         try:
-            # Extract JSON objects from response
-            json_pattern = r'\{[^{}]*\}'
-            matches = re.finditer(json_pattern, response)
-            
-            claims = []
-            for match in matches:
+            results = []
+            for content in contents:
+                result = await self.analyze(content, options)
+                results.append(result)
+            return results
+        except Exception as e:
+            logger.error(f"Error in batch fact checking: {str(e)}")
+            raise
+
+    async def validate_content(self, content: str) -> bool:
+        """
+        Validate if the content can be fact checked.
+
+        Args:
+            content: Content to validate
+
+        Returns:
+            True if content is valid, False otherwise
+        """
+        if not content or not isinstance(content, str):
+            return False
+        if len(content.strip()) < 20:  # Minimum content length
+            return False
+        return True
+
+    async def close(self):
+        """Close the fact checker and release resources."""
+        try:
+            await self.ollama.close()
+            await self.search_factory.close_all()
+            await self.extraction_factory.close_all()
+        except Exception as e:
+            logger.error(f"Error closing fact checker: {str(e)}")
+
+    async def _extract_claims(self, content: str) -> List[str]:
+        """
+        Extract verifiable claims from content.
+
+        Args:
+            content: Content to extract claims from
+
+        Returns:
+            List of extracted claims
+        """
+        prompt = f"""Extract verifiable factual claims from the following content. Each claim should be a complete statement that can be verified against external sources.
+
+Content:
+{content}
+
+Claims:"""
+        
+        response = await self.ollama.generate(prompt=prompt)
+        claims = [claim.strip() for claim in response.split("\n") if claim.strip()]
+        return claims
+
+    async def _verify_claim(
+        self,
+        claim: str,
+        max_sources: int,
+        min_confidence: float,
+        search_engines: List[str],
+        verification_depth: str
+    ) -> Dict[str, Any]:
+        """
+        Verify a single claim against multiple sources.
+
+        Args:
+            claim: Claim to verify
+            max_sources: Maximum number of sources to check
+            min_confidence: Minimum confidence threshold
+            search_engines: List of search engines to use
+            verification_depth: Depth of verification
+
+        Returns:
+            Dictionary containing verification results
+        """
+        # Search for sources
+        sources = []
+        for engine in search_engines:
+            searcher = self.search_factory.get_searcher(engine)
+            if searcher:
+                results = await searcher.search(claim, limit=max_sources)
+                sources.extend(results)
+
+        # Extract content from sources
+        source_contents = []
+        for source in sources:
+            extractor = self.extraction_factory.get_extractor("web")
+            if extractor:
                 try:
-                    # Parse JSON-like string
-                    claim_str = match.group()
-                    # Convert to proper JSON format
-                    claim_str = claim_str.replace("'", '"')
-                    import json
-                    claim = json.loads(claim_str)
-                    claims.append(claim)
-                except:
-                    continue
-                    
-            return claims
-        except Exception as e:
-            logger.error(f"Error parsing claims: {str(e)}")
-            return []
+                    content = await extractor.extract(source.url)
+                    source_contents.append({
+                        "url": source.url,
+                        "content": content.content,
+                        "metadata": content.metadata
+                    })
+                except Exception as e:
+                    logger.error(f"Error extracting content from {source.url}: {str(e)}")
 
-    def _parse_verification(self, response: str) -> Optional[Dict[str, Any]]:
+        # Verify claim against sources
+        verification_prompt = f"""Verify the following claim against the provided sources. Provide a confidence score (0-1) and explain your reasoning.
+
+Claim: {claim}
+
+Sources:
+{self._format_sources(source_contents)}
+
+Verification:"""
+        
+        response = await self.ollama.generate(prompt=verification_prompt)
+        
+        # Parse verification result
+        try:
+            confidence = float(response.split("Confidence:")[1].split("\n")[0].strip())
+            explanation = response.split("Explanation:")[1].strip()
+        except:
+            confidence = 0.0
+            explanation = "Failed to parse verification result"
+
+        return {
+            "claim": claim,
+            "verified": confidence >= min_confidence,
+            "confidence": confidence,
+            "explanation": explanation,
+            "sources": source_contents
+        }
+
+    async def _generate_report(self, verification_results: List[Dict[str, Any]]) -> str:
         """
-        Parse verification result from LLM response.
+        Generate a verification report.
 
         Args:
-            response: LLM response containing verification
+            verification_results: List of verification results
 
         Returns:
-            Parsed verification result or None if parsing fails
+            Formatted verification report
         """
-        try:
-            # Extract JSON object from response
-            json_pattern = r'\{[^{}]*\}'
-            match = re.search(json_pattern, response)
-            
-            if match:
-                # Parse JSON-like string
-                verification_str = match.group()
-                # Convert to proper JSON format
-                verification_str = verification_str.replace("'", '"')
-                import json
-                return json.loads(verification_str)
-                
-            return None
-        except Exception as e:
-            logger.error(f"Error parsing verification: {str(e)}")
-            return None 
+        report = "Fact Checking Report\n\n"
+        
+        for i, result in enumerate(verification_results, 1):
+            report += f"Claim {i}: {result['claim']}\n"
+            report += f"Status: {'Verified' if result['verified'] else 'Not Verified'}\n"
+            report += f"Confidence: {result['confidence']:.2f}\n"
+            report += f"Explanation: {result['explanation']}\n"
+            report += f"Sources: {len(result['sources'])}\n\n"
+
+        return report
+
+    def _format_sources(self, sources: List[Dict[str, Any]]) -> str:
+        """
+        Format sources for verification prompt.
+
+        Args:
+            sources: List of source contents
+
+        Returns:
+            Formatted source string
+        """
+        formatted = ""
+        for i, source in enumerate(sources, 1):
+            formatted += f"Source {i}:\n"
+            formatted += f"URL: {source['url']}\n"
+            formatted += f"Content: {source['content'][:500]}...\n\n"
+        return formatted 
